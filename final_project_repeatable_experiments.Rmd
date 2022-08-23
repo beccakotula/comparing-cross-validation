@@ -1,0 +1,244 @@
+---
+title: "Final Project- Repeatable Experiments"
+author: "Rebecca Kotula"
+date: "8/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Load Packages
+```{r, warning=FALSE}
+source("cross_validation_functions.R")# custom CV & data-loading functions
+library(xpectr) # set_test_seed()
+library(ggplot2)
+library(reshape2)
+library(scales) # comma format for plots
+```
+
+## Load & Prepare Data
+```{r}
+# Load Data
+housing <- load_housing_dataset()
+
+# Set seed for repeatability
+set_test_seed(1) 
+
+# Split data 80/20 for training/validation, and testing
+partitions <- partition(housing, p = 0.2, id_col = "id")
+test.set <- partitions[[1]]
+train.set <- partitions[[2]]
+
+max.price <- max(train.set$price)
+min.price <- min(train.set$price)
+```
+
+## Visualizing the Distribution of Price
+
+```{r}
+h <- ggplot(train.set, aes(x=price)) +
+    geom_histogram(bins=50) +
+    scale_x_continuous(labels = comma) + 
+    labs(title = "Histogram of Housing Prices")
+plot(h)
+#ggsave("price_histogram.png", h, "png", "/Users/rebeccakotula/Library/Mobile Documents/com~apple~CloudDocs/Documents/Theory of Statistics I/Project/Images/")
+```
+
+## Correlation of Features
+```{r}
+correlations <- cor(train.set[,!names(train.set) %in% c("id", "df.index", "lat", "long", "date", "zipcode", "sqft_living15", "sqft_lot15")])
+correlations <- round(correlations,2)
+melted_cor <- melt(correlations)
+c <- ggplot(data = melted_cor, aes(x=Var1, y=Var2, fill=value)) + 
+    geom_tile()+
+    scale_fill_gradient2(low = "red", high = "red", mid = "yellow", 
+                         midpoint = 0, limit = c(-1,1), space = "Lab", 
+                         name="Pearson\nCorrelation")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1),
+          axis.text.y = element_text(size=12),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank())+
+    geom_text(aes(Var2, Var1, label = value), color = "black", size = 3) 
+plot(c)
+#ggsave("correlations.png", c, "png", "/Users/rebeccakotula/Library/Mobile Documents/com~apple~CloudDocs/Documents/Theory of Statistics I/Project/Images/", width=7,height=5)
+```
+```{r }
+relevant.features <- sort(correlations[,1], decreasing=TRUE)
+relevant.features
+```
+
+## Choice of k Comparison
+
+Comparing multiple cross-validation methods and choices of $k$ with one static model, 100 simulations for each choice of $k$.  
+```{r}
+model.baseline <- "price ~ bedrooms + grade + sqft_living"
+
+#### 10 fold cv
+score.list10 <- data.frame(matrix(ncol=3,nrow=0, dimnames=list(NULL, c("KCV.RMSE", "MPCV.RMSE", "LOOCV.RMSE"))))
+
+for (i in 1:100){
+    # Set seed for repeatability
+    set_test_seed(i) 
+    # Create fold assignments
+    train.set10 <- fold(train.set, 10, id_col="id")
+    # Scores with 10 folds
+    k.score10 <- KCV(train.set10, k=10, model=model.baseline, predict.col="price")
+    m.score10 <- MPCV(train.set10, k=10, model=model.baseline, predict.col="price", df.index = "df.index")
+    l.score10 <- LOOCV(train.set10, model=model.baseline, predict.col="price")
+    
+    score.list10 <- rbind(score.list10, data.frame(KCV.RMSE=k.score10, MPCV.RMSE=m.score10, LOOCV.RMSE=l.score10))
+}
+
+print("10 Fold scores")
+print(colMeans(score.list10))
+
+
+#### 5 fold cv
+score.list5 <- data.frame(matrix(ncol=3,nrow=0, dimnames=list(NULL, c("KCV.RMSE", "MPCV.RMSE", "LOOCV.RMSE"))))
+
+for (i in 1:100){
+    # Set seed for repeatability
+    set_test_seed(i) 
+    # Create fold assignments
+    train.set5 <- fold(train.set, 5, id_col="id")
+    # Scores with 5 folds
+    k.score5 <- KCV(train.set5, k=5, model=model.baseline, predict.col="price")
+    m.score5 <- MPCV(train.set5, k=5, model=model.baseline, predict.col="price", df.index = "df.index")
+    l.score5 <- LOOCV(train.set5, model=model.baseline, predict.col="price")
+    
+    score.list5 <- rbind(score.list5, data.frame(KCV.RMSE=k.score5, MPCV.RMSE=m.score5, LOOCV.RMSE=l.score5))
+}
+print("5 Fold Scores")
+print(colMeans(score.list5))
+```
+
+## Stepwise Feature Elimination to Compare CV Methods
+
+Set up the dataset, using 5 folds. 
+```{r}
+# Set seed for repeatability
+set_test_seed(1) 
+# Create fold id column in train set (used by custom CV functions)
+train.set1 <- fold(train.set, 5, id_col="id")
+```
+
+### Uninformed Baseline (features not sorted)
+```{r, warning=FALSE}
+###### Models ##################################################################
+#unused cols: "sqft_living15", "sqft_lot15", "zipcode"
+model1 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated"
+model2 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built"
+model3 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement"
+model4 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot + floors + waterfront + view + condition + grade + sqft_above"
+model5 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot + floors + waterfront + view + condition + grade"
+model6 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot + floors + waterfront + view + condition"
+model7 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot + floors + waterfront + view "
+model8 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot + floors + waterfront"
+model9 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot + floors"
+model10 <- "price ~ bedrooms + bathrooms + sqft_living+ sqft_lot"
+model11 <- "price ~ bedrooms + bathrooms + sqft_living"
+model12 <- "price ~ bedrooms + bathrooms"
+model13 <- "price ~ bedrooms"
+model_list <- c(model1, model2, model3, model4, model5, model6, model7, model8, model9, model10, model11, model12, model13)
+
+
+###### Run CV ##################################################################
+k.scores <- c()
+m.scores <- c()
+l.scores <- c()
+for (model in model_list) {
+    k.scores <- c(k.scores, KCV(train.set1, k=10, model=model, predict.col="price"))
+    m.scores <- c(m.scores, MPCV(train.set1, k=10, model=model, predict.col="price", df.index = "df.index"))
+    l.scores <- c(l.scores, LOOCV(train.set1, model=model, predict.col="price"))
+}
+
+results <- data.frame(model=seq(1,length(model_list), 1), k.scores, m.scores, l.scores)
+#print(which.min(k.scores))
+results
+saveRDS(results,file="/Users/rebeccakotula/Library/Mobile Documents/com~apple~CloudDocs/Documents/Theory of Statistics I/Project/Datasets/results.Rda")
+```
+Which model is has the lowest score for each of the three methods? (kcv, mpcv, loocv)
+```{r}
+best.k <- which.min(results$k.scores)
+best.m <- which.min(results$m.scores)
+best.l <- which.min(results$l.scores)
+
+print(c(best.k, best.m, best.l))
+```
+
+Plot of the results:
+```{r}
+results.melt <- melt(results, id.var=c("model"))
+colnames(results.melt) <- c("model", "cv_method", "score")
+g <- ggplot(data = results.melt, aes(x=model, y=score, col=cv_method)) +
+    geom_line()+
+    labs(title = "Comparison of CV Methods (unsorted)", x = "Model Label", y = "RMSE", color = "CV Method") +
+    scale_color_manual(labels = c("KCV", "MPCV", "LOOCV"), values = c("darkorange1", "darkolivegreen4", "cornflowerblue")) +
+    scale_x_continuous(labels=as.character(seq(1,length(model_list), 1)), breaks=seq(1,length(model_list), 1))
+plot(g)
+#ggsave("unsorted_stepwise_comparisons.png", g, "png", "/Users/rebeccakotula/Library/Mobile Documents/com~apple~CloudDocs/Documents/Theory of Statistics I/Project/Images/")
+```
+
+### Sorted Baseline (by correlation)
+```{r, warning=FALSE}
+###### Models ##################################################################
+#unused cols: "sqft_living15", "sqft_lot15", "zipcode"
+model1 <- "price ~ sqft_living+ grade + sqft_above + bathrooms + view + sqft_basement + bedrooms + waterfront + floors + yr_renovated + sqft_lot + yr_built + condition"
+model2 <- "price ~ sqft_living+ grade + sqft_above + bathrooms + view + sqft_basement + bedrooms + waterfront + floors + yr_renovated + sqft_lot + yr_built"
+model3 <- "price ~ sqft_living+ grade + sqft_above + bathrooms + view + sqft_basement + bedrooms + waterfront + floors + yr_renovated + sqft_lot"
+model4 <- "price ~ sqft_living+ grade + sqft_above + bathrooms + view + sqft_basement + bedrooms + waterfront + floors + yr_renovated"
+model5 <- "price ~ sqft_living+ grade + sqft_above + bathrooms + view + sqft_basement + bedrooms + waterfront + floors"
+model6 <- "price ~ sqft_living+ grade + sqft_above + bathrooms + view + sqft_basement + bedrooms + waterfront"
+model7 <- "price ~ sqft_living+ grade + sqft_above + bathrooms + view + sqft_basement + bedrooms"
+model8 <- "price ~ sqft_living+ grade + sqft_above + bathrooms + view + sqft_basement"
+model9 <- "price ~ sqft_living+ grade + sqft_above + bathrooms + view"
+model10 <- "price ~ sqft_living+ grade + sqft_above + bathrooms"
+model11 <- "price ~ sqft_living+ grade + sqft_above"
+model12 <- "price ~ sqft_living+ grade"
+model13 <- "price ~ sqft_living"
+
+model_list <- c(model1, model2, model3, model4, model5, model6, model7, model8, model9, model10, model11, model12, model13)
+
+
+###### Run CV ##################################################################
+k.scores <- c()
+m.scores <- c()
+l.scores <- c()
+for (model in model_list) {
+    k.scores <- c(k.scores, KCV(train.set1, k=10, model=model, predict.col="price"))
+    m.scores <- c(m.scores, MPCV(train.set1, k=10, model=model, predict.col="price", df.index = "df.index"))
+    l.scores <- c(l.scores, LOOCV(train.set1, model=model, predict.col="price"))
+}
+
+results2 <- data.frame(model=seq(1,length(model_list), 1), k.scores, m.scores, l.scores)
+#print(which.min(k.scores))
+results2
+saveRDS(results2,file="/Users/rebeccakotula/Library/Mobile Documents/com~apple~CloudDocs/Documents/Theory of Statistics I/Project/Datasets/results_sorted.Rda")
+
+```
+Which model is has the lowest score for each of the three methods? (kcv, mpcv, loocv)
+```{r}
+best.k <- which.min(results2$k.scores)
+best.m <- which.min(results2$m.scores)
+best.l <- which.min(results2$l.scores)
+
+print(c(best.k, best.m, best.l))
+```
+
+Plot of the results:
+```{r}
+results2.melt <- melt(results2, id.var=c("model"))
+colnames(results2.melt) <- c("model", "cv_method", "score")
+g <- ggplot(data = results2.melt, aes(x=model, y=score, col=cv_method)) +
+    geom_line()+
+    labs(title = "Comparison of CV Methods (sorted)", x = "Model Label", y = "RMSE", color = "CV Method") +
+    scale_color_manual(labels = c("KCV", "MPCV", "LOOCV"), values = c("darkorange1", "darkolivegreen4", "cornflowerblue")) +
+    scale_x_continuous(labels=as.character(seq(1,length(model_list), 1)), breaks=seq(1,length(model_list), 1))
+plot(g)
+#ggsave("sorted_stepwise_comparisons.png", g, "png", "/Users/rebeccakotula/Library/Mobile Documents/com~apple~CloudDocs/Documents/Theory of Statistics I/Project/Images/")
+```
+
+
+
+
